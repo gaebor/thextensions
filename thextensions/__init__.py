@@ -111,24 +111,32 @@ class AdagradOptimizer(Optimizer):
 class HessianOptimizer(Optimizer):
     """
     x <-- x - eta * Hessian \ grad(f)
+    possibly with multipliers
     """
-    def __init__(self, objective, *vars, eta=1.0, constraints={}, **kwargs):
-        super().__init__(objective, *vars, minimize=True, constraints=constraints, **kwargs)
-        self.var = T.concatenate([var.reshape((-1,)) for var in vars])
+    def __init__(self, objective, *vars, eta=1.0, constraints=[], minimize=True, **kwargs):
+        self.slack_vars = tuple(T.TensorType(c.dtype, c.broadcastable)() for c in constraints)
+        objective = objective + sum([(self.slack_vars[i]*constraints[i]).sum() for i in range(len(constraints))])
+        
+        super().__init__(objective, *(vars+self.slack_vars), minimize=True, constraints={}, **kwargs)
+        
+        self.var = T.concatenate([var.reshape((-1,)) for var in self.sym_vars])
         self.hessian = Hessian(objective, *self.sym_vars)
         self.grad = Grad(objective, *self.sym_vars)
         self.eta = eta
-
-    def init(self, *initvals, **kwargs):
+        
+    def init(self, *initvals, slack_variables=[], **kwargs):
+    
+        initvals = initvals + tuple(numpy.ones(dtype=theano.config.floatX, shape=s) for s in slack_variables)
         super().init(*initvals)
+        
         self.sizes = [val.size for val in initvals]
         self.sizes = reduce(lambda x, y: x + [x[-1]+y], self.sizes, [0])
         
     def grad_steps(self):
         direction = linalg.solve_symmetric(self.hessian, self.grad)
+        n = len(self.sym_vars)
         return tuple(self.eta*direction[self.sizes[i]:self.sizes[i+1]].reshape(self.sym_vars[i].shape) \
                      for i in range(len(self.sym_vars)))
-        return tuple(self.eta*x for x in self.grads)
 
 def Grad(objective, *Vars, **kwargs):
     """gradients concatenated into a big vector"""
